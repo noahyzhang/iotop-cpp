@@ -9,32 +9,32 @@ namespace iotop_cpp {
 
 // -------------------- class ViewBatch implement --------------------
 
-void ViewBatch::view_init() override {
+void ViewBatch::view_init()  {
     if (Util::read_task_delayacct() == 0) {
         std::cout << "Warning: task_delayacct is 0, enable by: echo 1 > /proc/sys/kernel/task_delayacct" << std::endl;
     }
 }
 
-void ViewBatch::view_loop() override {
+void ViewBatch::view_loop()  {
     for (;;) {
         
     }
 }
 
-void ViewBatch::view_finish() override {}
+void ViewBatch::view_finish() {}
 
 
 // -------------------- class ViewCurses implement --------------------
 
-void ViewCurses::view_init() override {
+void ViewCurses::view_init() {
     
 }
 
-void ViewCurses::view_loop() override {
+void ViewCurses::view_loop() {
 
 }
 
-void ViewCurses::view_finish() override {
+void ViewCurses::view_finish() {
 
 }
 
