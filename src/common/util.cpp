@@ -6,8 +6,15 @@
 #include <sys/resource.h>
 #include <stdlib.h>
 #include <fcntl.h>
-#include <easylogging++.h>
-#include "src/util.h"
+#include <dirent.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <string.h>
+#include <errno.h>
+#include <pwd.h>
+#include <vector>
+#include <sstream>
+#include "common/util.h"
 
 namespace iotop_cpp {
 
@@ -174,6 +181,110 @@ int Util::get_file_first_line(const std::string& path, std::shared_ptr<std::stri
         return 0;
     }
     return -3;
+}
+
+std::vector<std::pair<uint64_t, std::vector<uint64_t>>> Util::get_all_task_id(bool is_only_pid) {
+    static std::vector<std::pair<uint64_t, std::vector<uint64_t>>> task_ids;
+    task_ids.clear();
+    // 遍历 /proc 文件系统
+    int dir_fd = openat(AT_FDCWD, "/proc", O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if (dir_fd < 0) {
+        RESMON_V2_LOG(ERROR) << "openat dir: " << "/proc" << " failed, err: " << strerror(errno);
+        return task_ids;
+    }
+    DIR* dir = fdopendir(dir_fd);
+    if (!dir) {
+        close(dir_fd);
+        RESMON_V2_LOG(ERROR) << "fdopendir: " << dir_fd << " failed, err: " << strerror(errno);
+        return task_ids;
+    }
+    // 读取 proc 文件系统中进程或线程的目录中的文件信息
+    const struct dirent* entry;
+    while ((entry = readdir(dir)) != nullptr) {
+        // 跳过非目录
+        if (entry->d_type != DT_DIR && entry->d_type != DT_UNKNOWN) {
+            continue;
+        }
+        const char* name = entry->d_name;
+        // RedHat 会使用点来隐藏线程，这里进行兼容
+        if (name[0] == '.') {
+            name++;
+        }
+        // 跳过名字为非数字的目录，任务的目录一定以数字（pid）命名
+        if (name[0] < '0' || name[0] > '9') {
+            continue;
+        }
+        // 文件的名字应该为一个数字，表明是进程的目录
+        char* end_ptr = nullptr;
+        uint64_t pid = strtoul(name, &end_ptr, 10);
+        if (pid == 0 || pid == UINT64_MAX || *end_ptr != '\0') {
+            continue;
+        }
+        if (!is_only_pid) {
+            auto tids = get_all_thread_id(pid);
+            task_ids.emplace_back(pid, tids);
+        } else {
+            task_ids.emplace_back(pid, std::vector<uint64_t>());
+        }
+    }
+    closedir(dir);
+    close(dir_fd);
+    return task_ids;
+}
+
+std::vector<uint64_t> Util::get_all_thread_id(uint64_t pid) {
+    std::vector<uint64_t> tids;
+    std::stringstream oss;
+    oss << "/proc/" << pid << "/task";
+    std::string pavaro_thread_path = oss.str();
+    int dir_fd = openat(AT_FDCWD, pavaro_thread_path.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if (dir_fd < 0) {
+        RESMON_V2_LOG(ERROR) << "openat pavaro_thread_path: "
+            << pavaro_thread_path << " failed, err: " << strerror(errno);
+        return tids;
+    }
+    DIR* dir = fdopendir(dir_fd);
+    if (!dir) {
+        close(dir_fd);
+        RESMON_V2_LOG(ERROR) << "fdopendir: " << dir_fd << " failed, err: " << strerror(errno);
+        return tids;
+    }
+    // 读取 proc 文件系统中进程目录下所有线程的文件信息
+    const struct dirent* entry;
+    while ((entry = readdir(dir)) != nullptr) {
+        // 跳过非目录
+        if (entry->d_type != DT_DIR && entry->d_type != DT_UNKNOWN) {
+            continue;
+        }
+        const char* name = entry->d_name;
+        // RedHat 会使用点来隐藏线程，这里进行兼容
+        if (name[0] == '.') {
+            name++;
+        }
+        // 跳过名字为非数字的目录，任务的目录一定以数字（pid）命名
+        if (name[0] < '0' || name[0] > '9') {
+            continue;
+        }
+        // 文件的名字应该为一个数字，表明是线程的目录
+        char* end_ptr = nullptr;
+        uint64_t thread_id = strtoul(name, &end_ptr, 10);
+        if (thread_id == 0 || thread_id == UINT64_MAX || *end_ptr != '\0') {
+            continue;
+        }
+        tids.emplace_back(thread_id);
+    }
+    closedir(dir);
+    close(dir_fd);
+    return tids;
+}
+
+std::string Util::get_user_name(int user_id) {
+    struct passwd* pwd = getpwuid(user_id);
+    if (pwd && pwd->pw_name) {
+        return std::string(pwd->pw_name);
+    } else {
+        return "<unknown>";
+    }
 }
 
 }  // namespace iotop_cpp

@@ -3,8 +3,7 @@
 
 #include <pwd.h>
 #include <iostream>
-#include "src/config.h"
-#include "src/version.h"
+#include "config.h"
 
 namespace iotop_cpp {
 
