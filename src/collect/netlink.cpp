@@ -6,9 +6,10 @@
 #include <linux/taskstats.h>
 #include <linux/netlink.h>
 #include <linux/genetlink.h>
+#include <fcntl.h>
 #include <cstring>
 #include <string>
-#include <fcntl.h>
+#include <iostream>
 #include "collect/netlink.h"
 
 namespace iotop_cpp {
@@ -18,25 +19,25 @@ int NetlinkIoStats::get_task_io_info(uint64_t task_id, std::shared_ptr<TaskIoInf
     int res = send_netlink_cmd(netlink_family_id_, task_id, TASKSTATS_CMD_GET,
                                  TASKSTATS_CMD_ATTR_PID, &task_id, sizeof(task_id));
     if (__glibc_unlikely(res < 0)) {
-        RESMON_V2_LOG(ERROR) << "send_netlink_cmd failed, errno: " << res;
+        std::cerr << "send_netlink_cmd failed, errno: " << res << std::endl;
         return -2;
     }
     // 接收内核返回的数据
     struct NetlinkMsgTemplate msg;
     ssize_t rep_len = recv(sock_fd_, &msg, sizeof(msg), 0);
     if (rep_len < 0) {
-        RESMON_V2_LOG(ERROR) << "recv failed, errno: " << errno << ", " << strerror(errno);
+        std::cerr << "recv failed, errno: " << errno << ", " << strerror(errno);
         return -3;
     }
     if (!NLMSG_OK((&msg.nl_msg), (size_t)rep_len)) {
-        RESMON_V2_LOG(ERROR) << "recv failed, ret netlink value err";
+        std::cerr << "recv failed, ret netlink value err" << std::endl;
         return -4;
     }
     if (msg.nl_msg.nlmsg_type == NLMSG_ERROR) {
-        struct nlmsgerr *err = reinterpret_cast<struct nlmsgerr*>(NLMSG_DATA(&msg));
-        if (err->error != -ESRCH) {
-            RESMON_V2_LOG(ERROR) << "recv reply failed, errno: " << err->error;
-        }
+        // struct nlmsgerr *err = reinterpret_cast<struct nlmsgerr*>(NLMSG_DATA(&msg));
+        // if (err->error != -ESRCH) {
+        //     std::cerr << "recv reply failed, task_id: " << task_id << ", errno: " << err->error << std::endl;
+        // }
         return -5;
     }
     rep_len = GENLMSG_PAYLOAD(&msg.nl_msg);
@@ -52,24 +53,13 @@ int NetlinkIoStats::get_task_io_info(uint64_t task_id, std::shared_ptr<TaskIoInf
             while (len2 < aggr_len) {
                 if (na->nla_type == TASKSTATS_TYPE_STATS) {
                     struct taskstats *ts = reinterpret_cast<struct taskstats*>(NLA_DATA(na));
+                    io_stats->user_id = ts->ac_uid;
                     io_stats->io_read_char_b = ts->read_char;
                     io_stats->io_write_char_b = ts->write_char;
                     io_stats->io_real_read_b = ts->read_bytes;
                     io_stats->io_real_write_b = ts->write_bytes;
-                    io_stats->io_read_syscalls = ts->read_syscalls;
-                    io_stats->io_write_syscalls = ts->write_syscalls;
-
-                    io_stats->user_id = ts->ac_uid;
-                    io_stats->swapin_delay_total = ts->swapin_delay_total;
-                    io_stats->blkio_delay_total = ts->blkio_delay_total;
-
-                    RESMON_V2_LOG(DEBUG) << "NetlinkIoStats::get_task_io_info, "
-                        << "read_char: " << io_stats->io_read_char_b
-                        << ", write_char: " << io_stats->io_write_char_b
-                        << ", real_read_bytes: " << io_stats->io_real_read_b
-                        << ", real_write_bytes: " << io_stats->io_real_write_b
-                        << ", read_syscalls: " << io_stats->io_read_syscalls
-                        << ", write_syscalls: " << io_stats->io_write_syscalls;
+                    io_stats->swapin_delay_total_ns = ts->swapin_delay_total;
+                    io_stats->blkio_delay_total_ns = ts->blkio_delay_total;
                 }
                 len2 += NLA_ALIGN(na->nla_len);
                 na = reinterpret_cast<struct nlattr*>(reinterpret_cast<char *>(na) + len2);
@@ -96,7 +86,7 @@ int NetlinkIoStats::init_sock() {
     struct sockaddr_nl addr;
     sock_fd_ = socket(PF_NETLINK, SOCK_RAW, NETLINK_GENERIC);
     if (sock_fd_ < 0) {
-        RESMON_V2_LOG(ERROR) << "create socket failed, errno: " << errno << ", " << strerror(errno);
+        std::cerr << "create socket failed, errno: " << errno << ", " << strerror(errno) << std::endl;
         return -1;
     }
     memset(&addr, 0, sizeof(addr));
@@ -104,12 +94,12 @@ int NetlinkIoStats::init_sock() {
     if (bind(sock_fd_, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         // 如果 bind 失败，退出前需要释放 sock_fd_
         close(sock_fd_);
-        RESMON_V2_LOG(ERROR) << "bind failed, errno: " << errno << ", " << strerror(errno);
+        std::cerr << "bind failed, errno: " << errno << ", " << strerror(errno) << std::endl;
         return -2;
     }
     int flags = fcntl(sock_fd_, F_GETFL, 0);
     if (fcntl(sock_fd_, F_SETFL, flags | O_NONBLOCK) < 0) {
-        RESMON_V2_LOG(ERROR) << "fcntl failed, errno: " << errno << ", " << strerror(errno);
+        std::cerr << "fcntl failed, errno: " << errno << ", " << strerror(errno) << std::endl;
         return -3;
     }
     return 0;
@@ -120,33 +110,33 @@ int NetlinkIoStats::init_netlink_family_id() {
     auto res = send_netlink_cmd(GENL_ID_CTRL, getpid(), CTRL_CMD_GETFAMILY, CTRL_ATTR_FAMILY_NAME,
                     reinterpret_cast<void*>(const_cast<char*>(name.c_str())), name.size() + 1);
     if (res < 0) {
-        RESMON_V2_LOG(ERROR) << "send_netlink_cmd failed, errno: " << res;
+        std::cerr << "send_netlink_cmd failed, errno: " << res << std::endl;
         return -1;
     }
     struct NetlinkMsgTemplate ret_value;
     ssize_t rep_len = recv(sock_fd_, &ret_value, sizeof(ret_value), 0);
     if (rep_len < 0) {
-        RESMON_V2_LOG(ERROR) << "recv failed, errno: " << errno << ", " << strerror(errno);
+        std::cerr << "recv failed, errno: " << errno << ", " << strerror(errno) << std::endl;
         return -2;
     }
     if (!NLMSG_OK((&ret_value.nl_msg), (size_t)rep_len)) {
-        RESMON_V2_LOG(ERROR) << "recv failed, ret netlink value err";
+        std::cerr << "recv failed, ret netlink value err" << std::endl;
         return -3;
     }
     if (ret_value.nl_msg.nlmsg_type == NLMSG_ERROR) {
-        RESMON_V2_LOG(ERROR) << "recv failed, ret value nl_msg_type is NLMSG_ERROR";
+        std::cerr << "recv failed, ret value nl_msg_type is NLMSG_ERROR" << std::endl;
         return -4;
     }
     struct nlattr *nl_attr = reinterpret_cast<struct nlattr*>(
         reinterpret_cast<char*>(NLMSG_DATA(&ret_value)) + GENL_HDRLEN);
     nl_attr = reinterpret_cast<struct nlattr*>((reinterpret_cast<char*>(nl_attr) + NLA_ALIGN(nl_attr->nla_len)));
     if (nl_attr->nla_type != CTRL_ATTR_FAMILY_ID) {
-        RESMON_V2_LOG(ERROR) << "recv failed, ret value nla_type unequal to CTRL_ATTR_FAMILY_ID";
+        std::cerr << "recv failed, ret value nla_type unequal to CTRL_ATTR_FAMILY_ID" << std::endl;
         return -5;
     }
     netlink_family_id_ = *(reinterpret_cast<uint16_t*>((reinterpret_cast<char*>(nl_attr) + NLA_HDRLEN)));
     if (netlink_family_id_ == 0) {
-        RESMON_V2_LOG(ERROR) << "get netlink family id is 0, this is valid value";
+        std::cerr << "get netlink family id is 0, this is valid value" << std::endl;
         return -6;
     }
     return 0;
@@ -189,7 +179,7 @@ int NetlinkIoStats::send_netlink_cmd(uint16_t nl_msg_type, uint32_t nl_msg_pid,
         } else {
             // EAGAIN: Try again
             if (errno != EAGAIN) {
-                RESMON_V2_LOG(ERROR) << "sendto call failed, errno: " << errno << ", " << strerror(errno);
+                std::cerr << "sendto call failed, errno: " << errno << ", " << strerror(errno) << std::endl;
                 return -1;
             }
         }
