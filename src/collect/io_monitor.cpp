@@ -30,7 +30,7 @@ int IoMonitor::collect_timed() {
     get_task_io_info(collect_tm_ns);
     origin_collect_timestamp_ns_ = collect_tm_ns;
     // 移除过期的任务
-    // remove_overdue_task();
+    remove_overdue_task();
     return 0;
 }
 
@@ -122,11 +122,8 @@ void IoMonitor::set_task_state_overdue() {
 void IoMonitor::remove_overdue_task() {
     auto iter = io_stats_.task_io_stats_table.begin();
     for (; iter != io_stats_.task_io_stats_table.end(); ) {
-        if (iter->second) {
-            if (iter->second->is_updated == false) {
-                iter->second.reset();
-                io_stats_.task_io_stats_table.erase(iter);
-            }
+        if (iter->second->is_updated == false) {
+            iter = io_stats_.task_io_stats_table.erase(iter);
         } else {
             ++iter;
         }
